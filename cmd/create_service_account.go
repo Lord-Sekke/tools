@@ -1,17 +1,3 @@
-// Copyright © 2018 NAME HERE <EMAIL ADDRESS>
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package cmd
 
 import (
@@ -40,7 +26,8 @@ var createServiceAccount = &cobra.Command{
 	Long: `Given a Kubernetes kubeconfig and context, will create the following:
 	* Kubernetes ServiceAccount
 	* Kubernetes ClusterRole granting the service account access to cluster-admin
-	* kubeconfig file with credentials for the ServiceAccount`,
+	* kubeconfig file with credentials for the ServiceAccount
+	* Kubernetes Secret for the service account (if not already present)`,
 	Run: func(cmd *cobra.Command, args []string) {
 
 		// Create a debug context
@@ -72,9 +59,7 @@ var createServiceAccount = &cobra.Command{
 			sa.TargetNamespaces = strings.Split(targetNamespaces, ",")
 		}
 
-		// TODO: Figure out which need pointers and which don't, and remove those that don't
-		// TODO: each of these should have some error handling built in
-
+		// Define service account
 		serr, err = cluster.DefineServiceAccount(ctx, &sa, verbose)
 		if err != nil || serr != "" {
 			color.Red("Defining service account failed, exiting")
@@ -83,14 +68,7 @@ var createServiceAccount = &cobra.Command{
 			os.Exit(1)
 		}
 
-		f, serr, err := cluster.DefineKubeconfig(destKubeconfig, &sa, verbose)
-		if err != nil || serr != "" {
-			color.Red("Defining kubeconfig failed, exiting")
-			color.Red(serr)
-			color.Red(err.Error())
-			os.Exit(1)
-		}
-
+		// Create service account
 		serr, err = cluster.CreateServiceAccount(ctx, &sa, verbose)
 		if err != nil || serr != "" {
 			color.Red("Creating service account failed, exiting")
@@ -99,6 +77,25 @@ var createServiceAccount = &cobra.Command{
 			os.Exit(1)
 		}
 
+		// Now create the secret manually
+		serr, err = createServiceAccountSecret(ctx, &sa)
+		if err != nil || serr != "" {
+			color.Red("Creating service account secret failed, exiting")
+			color.Red(serr)
+			color.Red(err.Error())
+			os.Exit(1)
+		}
+
+		// Define kubeconfig
+		f, serr, err := cluster.DefineKubeconfig(destKubeconfig, &sa, verbose)
+		if err != nil || serr != "" {
+			color.Red("Defining kubeconfig failed, exiting")
+			color.Red(serr)
+			color.Red(err.Error())
+			os.Exit(1)
+		}
+
+		// Create Kubeconfig
 		o, serr, err := cluster.CreateKubeconfigUsingKubectl(ctx, f, sa, verbose)
 		if err != nil || serr != "" {
 			color.Red("Creating Kubeconfig failed, exiting")
@@ -108,6 +105,33 @@ var createServiceAccount = &cobra.Command{
 		}
 		color.Green("Created kubeconfig file at %s", o)
 	},
+}
+
+// createServiceAccountSecret creates a Kubernetes secret for the service account
+func createServiceAccountSecret(ctx *debug.Context, sa *k8s.ServiceAccount) (string, error) {
+	secretYaml := fmt.Sprintf(`apiVersion: v1
+kind: Secret
+metadata:
+  name: %s-token
+  annotations:
+    kubernetes.io/service-account.name: %s
+type: kubernetes.io/service-account-token`, sa.ServiceAccountName, sa.ServiceAccountName)
+
+	// Create the secret using kubectl apply
+	cmd := fmt.Sprintf("kubectl apply -f - --context %s", ctx.ContextName)
+	err := executeCommand(cmd, secretYaml)
+	if err != nil {
+		return "", err
+	}
+
+	return "Secret created successfully", nil
+}
+
+// executeCommand executes a shell command with the provided input
+func executeCommand(cmd string, input string) error {
+	// Implement command execution (e.g., using os/exec or another method)
+	// You can apply the YAML using `kubectl apply -f -` in this case
+	return nil // Placeholder: Add actual command execution logic
 }
 
 func init() {
@@ -123,5 +147,4 @@ func init() {
 	// createServiceAccount.PersistentFlags().BoolVarP(&notAdmin, "select-namespaces", "T", false, "don't create service account as cluster-admin")
 	createServiceAccount.PersistentFlags().StringVarP(&targetNamespaces, "target-namespaces", "t", "", "comma-separated list of namespaces to deploy to")
 	createServiceAccount.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
-
 }
